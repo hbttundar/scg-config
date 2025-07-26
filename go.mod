@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/google/uuid v1.4.0
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.8.4
 )
