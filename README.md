@@ -1,187 +1,140 @@
 # SCG Config
 
-A configuration utility for Go applications that wraps [spf13/viper](https://github.com/spf13/viper) and provides a Laravel-like dot notation API.
+SCG Config is a configuration library for Go that wraps spf13/viper and exposes a Laravel-like dot notation API.  Its goal is to keep configuration simple, predictable and idiomatic while embracing Go’s conventions.
 
 [![CI](https://github.com/hbttundar/scg-config/actions/workflows/ci.yml/badge.svg)](https://github.com/hbttundar/scg-config/actions/workflows/ci.yml)
 
 ## Features
 
-- **Dot Notation API**: Access deeply nested configuration values using simple dot notation
-- **Type-Safe Methods**: Get configuration values with the correct type (string, int, bool, etc.)
-- **Environment Variables**: Load configuration from environment variables
-- **Configuration Files**: Load configuration from YAML, JSON, TOML, and other formats supported by Viper
-- **Case-Insensitive Keys**: Access configuration values regardless of key case
-- **Enhanced Nested Structure Support**: Access array elements by index and navigate complex nested structures
-- **Flexible Error Handling**: Options for continuing configuration loading even when some files fail
+SCG Config offers a concise, type-safe API for working with configuration:
+
+* Dot notation API – Access nested configuration values using a dot syntax (e.g. `app.name` or `database.host`).  Arrays can be traversed by index (e.g. `auth.roles.0`).
+* Single `Get` method – Retrieve values via one method by specifying the expected type through the `contract.KeyType` (e.g. `contract.String`, `contract.Int`, `contract.Bool`).  The method returns the value as `any` and an error if the key is missing or cannot be converted.  Use `Has` to check for existence before calling `Get`.
+* Multiple sources – Load configuration from YAML, JSON, TOML and other formats supported by Viper, either from a single file or from a directory of files.  Environment variables can also be loaded with an optional prefix.  Values loaded later override earlier ones.
+* Case-insensitive keys and nested structures – Keys are normalised to lower-case dot notation, and you can navigate arbitrarily deep maps and arrays.
+* Runtime overrides – Mutate configuration at runtime by writing to the underlying provider (`cfg.Provider().Set(key, value)`) and calling `cfg.Reload()` to refresh the getter.
+* Hot reloading – Watch configuration files for changes and execute a callback when a file is modified.  In the callback, call `ReadInConfig()` on the provider (if necessary) and `Reload()` on the config to pick up the changes.
+* Viper integration – Use the built-in Viper provider or wrap an existing Viper instance to add dot notation and reloading capabilities.
 
 ## Installation
 
-```bash
 go get github.com/hbttundar/scg-config
-```
 
 ## Usage
 
-### Basic Usage
+The central type in SCG Config is `*config.Config`, created via `config.New()`.  It embeds a Viper provider and a getter for reading values.  After loading configuration, call `Reload()` to refresh the internal getter with the latest data.
 
-```go
+### Loading from files and environment
+
 package main
 
 import (
-    "fmt"
-    "log"
+"fmt"
+"log"
+"os"
 
-    config "github.com/hbttundar/scg-config"
+      "github.com/hbttundar/scg-config/config"
+      "github.com/hbttundar/scg-config/contract"
 )
 
 func main() {
-    // Create a new configuration instance
-    cfg := config.New()
+cfg := config.New()
 
-    // Load configuration from a file
-    err := cfg.LoadFromFile("config.yaml")
-    if err != nil {
-        log.Fatalf("Error loading config: %v", err)
-    }
+      // Load all .yaml/.yml/.json files from a directory.  Each file’s basename becomes
+      // the top-level namespace.
+      if err := cfg.FileLoader().LoadFromDirectory("./config"); err != nil {
+          log.Fatalf("failed to load directory: %v", err)
+      }
 
-    // Access configuration values using dot notation
-    appName := cfg.GetString("app.name")
-    debugMode := cfg.GetBool("app.debug")
-    dbHost := cfg.GetString("database.connections.pgsql.host")
-    dbPort := cfg.GetInt("database.connections.pgsql.port")
+      // Load environment variables with prefix APP_.  The prefix is stripped
+      // and the rest is normalised to dot notation (e.g. APP_APP_NAME → app.name).
+      // Environment values override those from files.
+      _ = os.Setenv("APP_APP_NAME", "EnvName")
+      if err := cfg.EnvLoader().LoadFromEnv("APP"); err != nil {
+          log.Fatalf("failed to load env: %v", err)
+      }
 
-    fmt.Printf("App: %s (Debug: %v)\n", appName, debugMode)
-    fmt.Printf("Database: %s:%d\n", dbHost, dbPort)
+      // Refresh the getter after loading.
+      if err := cfg.Reload(); err != nil {
+          log.Fatalf("failed to reload config: %v", err)
+      }
+
+      // Retrieve values.  Specify the type using a contract.KeyType and cast
+      // the result to the appropriate Go type.
+      nameAny, err := cfg.Get("app.name", contract.String)
+      if err != nil {
+          log.Fatalf("app.name error: %v", err)
+      }
+      fmt.Println("Application Name:", nameAny.(string))
+
+      portAny, err := cfg.Get("server.port", contract.Int)
+      if err != nil {
+          log.Fatalf("server.port error: %v", err)
+      }
+      fmt.Println("Server Port:", portAny.(int))
 }
-```
 
-### Loading from Environment Variables
+### Programmatic overrides
 
-```go
-package main
+To set or override configuration values at runtime, write to the underlying provider and then call `Reload()`:
+
+// Override the log level
+cfg.Provider().Set("app.loglevel", "debug")
+_ = cfg.Reload()
+val, _ := cfg.Get("app.loglevel", contract.String)
+fmt.Println("New log level:", val.(string))
+
+### Checking for a key
+
+Use `Has` to check whether a key exists before attempting to read it:
+
+if cfg.Has("feature.newFlag") {
+// enable the new feature
+}
+
+### Watching for changes
+
+To react to configuration changes at runtime, watch one or more files and reload when they are modified:
+
+// Watch a specific config file
+if err := cfg.StartWatching("config/app.yaml"); err != nil {
+log.Fatal(err)
+}
+cfg.Watcher().Watch(func() {
+// Refresh the getter when the file changes
+if err := cfg.Provider().ReadInConfig(); err != nil {
+log.Println("read error:", err)
+}
+if err := cfg.Reload(); err != nil {
+log.Println("reload error:", err)
+return
+}
+if val, err := cfg.Get("app.name", contract.String); err == nil {
+fmt.Println("Updated app.name:", val.(string))
+}
+})
+
+### Using an existing Viper instance
+
+You can use SCG Config with an already configured Viper instance.  This allows you to leverage SCG’s dot notation and getter logic on top of your custom Viper setup.
 
 import (
-    "fmt"
-
-    config "github.com/hbttundar/scg-config"
+"github.com/spf13/viper"
+"github.com/hbttundar/scg-config/config"
+"github.com/hbttundar/scg-config/contract"
 )
 
-func main() {
-    // Create a new configuration instance
-    cfg := config.New()
+v := viper.New()
+v.SetConfigName("config")
+v.SetConfigType("yaml")
+v.AddConfigPath("./config")
+v.ReadInConfig()
 
-    // Load configuration from environment variables with prefix "APP"
-    // Environment variables like APP_DATABASE_HOST will be accessible as "database.host"
-    cfg.LoadFromEnv("APP")
+cfg := config.New(config.WithProvider(v))
+_ = cfg.Reload()
 
-    // Access configuration values
-    dbHost := cfg.GetString("database.host")
-    dbPort := cfg.GetInt("database.port")
-
-    fmt.Printf("Database: %s:%d\n", dbHost, dbPort)
-}
-```
-
-### Loading from Directory
-
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-
-    config "github.com/hbttundar/scg-config"
-)
-
-func main() {
-    // Create a new configuration instance
-    cfg := config.New()
-
-    // Load all .yaml, .yml, and .json files from a directory
-    // Each file's name (without extension) becomes the top-level namespace
-    // For example, "config/app.yaml" becomes accessible as "app.name"
-    err := cfg.LoadFromDirectory("config")
-    if err != nil {
-        log.Fatalf("Error loading config directory: %v", err)
-    }
-
-    // Access configuration values from different files
-    appName := cfg.GetString("app.name")
-    dbHost := cfg.GetString("database.host")
-    authEnabled := cfg.GetBool("auth.enabled")
-
-    fmt.Printf("App: %s\n", appName)
-    fmt.Printf("Database: %s\n", dbHost)
-    fmt.Printf("Auth Enabled: %v\n", authEnabled)
-}
-```
-
-### Available Methods
-
-```go
-// Get a value with type inference
-value := cfg.Get("some.key")
-
-// Get values with specific types
-str := cfg.GetString("string.value")
-num := cfg.GetInt("int.value")
-enabled := cfg.GetBool("feature.enabled")
-floatVal := cfg.GetFloat64("float.value")
-duration := cfg.GetDuration("timeout.duration")
-timestamp := cfg.GetTime("event.timestamp")
-strSlice := cfg.GetStringSlice("tags")
-strMap := cfg.GetStringMap("metadata")
-strMapStr := cfg.GetStringMapString("attributes")
-
-// Get values with panic on missing keys
-requiredStr := cfg.MustGetString("required.string")
-requiredNum := cfg.MustGetInt("required.int")
-requiredBool := cfg.MustGetBool("required.feature")
-requiredFloat := cfg.MustGetFloat64("required.float")
-requiredDuration := cfg.MustGetDuration("required.timeout")
-requiredTime := cfg.MustGetTime("required.timestamp")
-requiredSlice := cfg.MustGetStringSlice("required.tags")
-requiredMap := cfg.MustGetStringMap("required.metadata")
-requiredMapStr := cfg.MustGetStringMapString("required.attributes")
-
-// Check if a key exists
-if cfg.Has("optional.feature") {
-    // Use the feature
-}
-
-// Set a value programmatically
-cfg.Set("dynamic.setting", "value")
-```
-
-### Advanced: Using with Existing Viper Instance
-
-If you already have a configured Viper instance, you can wrap it with SCG Config:
-
-```go
-package main
-
-import (
-    "github.com/spf13/viper"
-    config "github.com/hbttundar/scg-config"
-)
-
-func main() {
-    // Create and configure a Viper instance
-    v := viper.New()
-    v.SetConfigName("config")
-    v.SetConfigType("yaml")
-    v.AddConfigPath(".")
-    v.ReadInConfig()
-
-    // Wrap it with SCG Config
-    cfg := config.NewWithViper(v)
-
-    // Now use the dot notation API
-    appName := cfg.GetString("app.name")
-    // ...
-}
-```
+appName, _ := cfg.Get("app.name", contract.String)
+fmt.Println("App Name:", appName.(string))
 
 ## License
 

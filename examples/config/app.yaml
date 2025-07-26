@@ -1,0 +1,19 @@
+app:
+  # Application name used throughout the system. Will be overridden by
+  # environment variable APP_APP_NAME when loaded via EnvLoader.
+  name: MyApp
+
+server:
+  # Default server port defined in YAML. This can be overridden via
+  # environment variables or programmatically via the provider.
+  port: 8080
+  # Timeout is expressed as a duration string understood by time.ParseDuration.
+  timeout: 30s
+
+auth:
+  # Whether authentication is enabled. Can be overridden by APP_AUTH_ENABLED.
+  enabled: false
+  # List of roles allowed to access the system.
+  roles:
+    - admin
+    - user
